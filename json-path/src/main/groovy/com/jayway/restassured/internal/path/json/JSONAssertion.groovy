@@ -14,10 +14,6 @@
  * limitations under the License.
  */
 
-
-
-
-
 package com.jayway.restassured.internal.path.json
 
 import com.jayway.restassured.internal.assertion.Assertion
@@ -34,7 +30,7 @@ class JSONAssertion implements Assertion {
   }
 
   def getAsJsonObject(object) {
-    key = escapePath(key, minus(), attributeGetter(), integer(), properties());
+    key = escapePath(key, minus(), attributeGetter(), integer(), properties(), classKeyword());
     def result;
     if (key == "\$" || key == "") {
       result = object

@@ -1,3 +1,19 @@
+/*
+ * Copyright 2015 the original author or authors.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *        http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 package com.jayway.restassured.module.mockmvc.internal;
 
 import com.jayway.restassured.authentication.NoAuthScheme;
@@ -12,6 +28,7 @@ import com.jayway.restassured.internal.filter.FilterContextImpl;
 import com.jayway.restassured.internal.http.CharsetExtractor;
 import com.jayway.restassured.internal.http.Method;
 import com.jayway.restassured.internal.log.LogRepository;
+import com.jayway.restassured.internal.support.PathSupport;
 import com.jayway.restassured.internal.util.SafeExceptionRethrower;
 import com.jayway.restassured.module.mockmvc.config.AsyncConfig;
 import com.jayway.restassured.module.mockmvc.config.RestAssuredMockMvcConfig;
@@ -37,6 +54,7 @@ import org.springframework.test.web.servlet.ResultHandler;
 import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
 import org.springframework.test.web.servlet.request.MockMultipartHttpServletRequestBuilder;
 import org.springframework.test.web.servlet.request.MockMvcRequestBuilders;
+import org.springframework.test.web.servlet.request.RequestPostProcessor;
 
 import java.io.*;
 import java.net.URI;
@@ -57,6 +75,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.request;
 
 class MockMvcRequestSenderImpl implements MockMvcRequestSender, MockMvcRequestAsyncConfigurer, MockMvcRequestAsyncSender {
+    private static final String ATTRIBUTE_NAME_URL_TEMPLATE = "org.springframework.restdocs.urlTemplate";
     private static final String CONTENT_TYPE = "Content-Type";
     private static final String CHARSET = "charset";
     private static final String LINE_SEPARATOR = "line.separator";
@@ -73,6 +92,7 @@ class MockMvcRequestSenderImpl implements MockMvcRequestSender, MockMvcRequestAs
     private final List<MockMvcMultiPart> multiParts;
     private final RequestLoggingFilter requestLoggingFilter;
     private final List<ResultHandler> resultHandlers;
+    private final List<RequestPostProcessor> requestPostProcessors;
     private final MockHttpServletRequestBuilderInterceptor interceptor;
     private final String basePath;
     private final ResponseSpecification responseSpecification;
@@ -83,17 +103,17 @@ class MockMvcRequestSenderImpl implements MockMvcRequestSender, MockMvcRequestAs
     MockMvcRequestSenderImpl(MockMvc mockMvc, Map<String, Object> params, Map<String, Object> queryParams, Map<String, Object> formParams, Map<String, Object> attributes,
                              RestAssuredMockMvcConfig config, Object requestBody, Headers headers, Cookies cookies,
                              List<MockMvcMultiPart> multiParts, RequestLoggingFilter requestLoggingFilter, List<ResultHandler> resultHandlers,
-                             MockHttpServletRequestBuilderInterceptor interceptor, String basePath, ResponseSpecification responseSpecification,
+                             List<RequestPostProcessor> requestPostProcessors, MockHttpServletRequestBuilderInterceptor interceptor, String basePath, ResponseSpecification responseSpecification,
                              Object authentication, LogRepository logRepository) {
-        this(mockMvc, params, queryParams, formParams, attributes, config, requestBody, headers, cookies, multiParts, requestLoggingFilter, resultHandlers, interceptor,
+        this(mockMvc, params, queryParams, formParams, attributes, config, requestBody, headers, cookies, multiParts, requestLoggingFilter, resultHandlers, requestPostProcessors, interceptor,
                 basePath, responseSpecification, authentication, logRepository, false);
     }
 
     private MockMvcRequestSenderImpl(MockMvc mockMvc, Map<String, Object> params, Map<String, Object> queryParams, Map<String, Object> formParams, Map<String, Object> attributes,
-                             RestAssuredMockMvcConfig config, Object requestBody, Headers headers, Cookies cookies,
-                             List<MockMvcMultiPart> multiParts, RequestLoggingFilter requestLoggingFilter, List<ResultHandler> resultHandlers,
-                             MockHttpServletRequestBuilderInterceptor interceptor, String basePath, ResponseSpecification responseSpecification,
-                             Object authentication, LogRepository logRepository, boolean isAsyncRequest) {
+                                     RestAssuredMockMvcConfig config, Object requestBody, Headers headers, Cookies cookies,
+                                     List<MockMvcMultiPart> multiParts, RequestLoggingFilter requestLoggingFilter, List<ResultHandler> resultHandlers,
+                                     List<RequestPostProcessor> requestPostProcessors, MockHttpServletRequestBuilderInterceptor interceptor, String basePath, ResponseSpecification responseSpecification,
+                                     Object authentication, LogRepository logRepository, boolean isAsyncRequest) {
         this.mockMvc = mockMvc;
         this.params = params;
         this.queryParams = queryParams;
@@ -106,6 +126,7 @@ class MockMvcRequestSenderImpl implements MockMvcRequestSender, MockMvcRequestAs
         this.multiParts = multiParts;
         this.requestLoggingFilter = requestLoggingFilter;
         this.resultHandlers = resultHandlers;
+        this.requestPostProcessors = requestPostProcessors;
         this.interceptor = interceptor;
         this.basePath = basePath;
         this.responseSpecification = responseSpecification;
@@ -129,9 +150,6 @@ class MockMvcRequestSenderImpl implements MockMvcRequestSender, MockMvcRequestAs
 
     private MockMvcResponse performRequest(MockHttpServletRequestBuilder requestBuilder) {
         MockHttpServletResponse response;
-        if (mockMvc == null) {
-            throw new IllegalStateException("You haven't configured a MockMVC instance. You can do this statically\n\nRestAssured.mockMvc = ..\nRestAssured.standaloneSetup(..);\nRestAssured.webAppContextSetup(..);\n\nor using the DSL:\n\ngiven().\n\t\tmockMvc(..). ..\n");
-        }
 
         if (interceptor != null) {
             interceptor.intercept(requestBuilder);
@@ -141,6 +159,10 @@ class MockMvcRequestSenderImpl implements MockMvcRequestSender, MockMvcRequestAs
             org.springframework.security.core.context.SecurityContextHolder.getContext().setAuthentication((org.springframework.security.core.Authentication) authentication);
         } else if (authentication instanceof Principal) {
             requestBuilder.principal((Principal) authentication);
+        }
+
+        for (RequestPostProcessor requestPostProcessor : requestPostProcessors) {
+            requestBuilder.with(requestPostProcessor);
         }
 
         MockMvcRestAssuredResponseImpl restAssuredResponse;
@@ -220,17 +242,20 @@ class MockMvcRequestSenderImpl implements MockMvcRequestSender, MockMvcRequestAs
             throw new IllegalStateException("You cannot specify a request body and a multi-part body in the same request. Perhaps you want to change the body to a multi part?");
         }
 
+        String uri;
         if (isNotBlank(basePath)) {
-            path = mergeAndRemoveDoubleSlash(basePath, path);
+            uri = mergeAndRemoveDoubleSlash(basePath, path);
+        } else {
+            uri = path;
         }
 
         final MockHttpServletRequestBuilder request;
         if (multiParts.isEmpty()) {
-            request = MockMvcRequestBuilders.request(method, path, pathParams);
+            request = MockMvcRequestBuilders.request(method, uri, pathParams);
         } else if (method != POST) {
             throw new IllegalArgumentException("Currently multi-part file data uploading only works for " + POST);
         } else {
-            request = MockMvcRequestBuilders.fileUpload(path, pathParams);
+            request = MockMvcRequestBuilders.fileUpload(uri, pathParams);
         }
 
         String requestContentType = findContentType();
@@ -283,6 +308,12 @@ class MockMvcRequestSenderImpl implements MockMvcRequestSender, MockMvcRequestAs
                 }
             }.applyParams();
         }
+
+
+        if (RestDocsClassPathChecker.isSpringRestDocsInClasspath() && config.getMockMvcConfig().shouldAutomaticallyApplySpringRestDocsMockMvcSupport()) {
+            request.requestAttr(ATTRIBUTE_NAME_URL_TEMPLATE, PathSupport.getPath(uri));
+        }
+
 
         if (StringUtils.isNotBlank(requestContentType)) {
             request.contentType(MediaType.parseMediaType(requestContentType));
@@ -360,18 +391,27 @@ class MockMvcRequestSenderImpl implements MockMvcRequestSender, MockMvcRequestAs
             }
         }
 
-        logRequestIfApplicable(method, path);
+        logRequestIfApplicable(method, uri, path);
 
         return performRequest(request);
     }
 
     // TODO Extract content-type from headers and apply charset if needed!
     private String findContentType() {
-        EncoderConfig encoderConfig = config.getEncoderConfig();
         String requestContentType = headers.getValue(CONTENT_TYPE);
+        if (StringUtils.isBlank(requestContentType) && !multiParts.isEmpty()) {
+            requestContentType = "multipart/" + config.getMultiPartConfig().defaultSubtype();
+        }
+
+        EncoderConfig encoderConfig = config.getEncoderConfig();
         if (requestContentType != null && encoderConfig.shouldAppendDefaultContentCharsetToContentTypeIfUndefined() && !StringUtils.containsIgnoreCase(requestContentType, CHARSET)) {
             // Append default charset to request content type
-            requestContentType += "; charset=" + encoderConfig.defaultContentCharset();
+            requestContentType += "; charset=";
+            if (encoderConfig.hasDefaultCharsetForContentType(requestContentType)) {
+                requestContentType += encoderConfig.defaultCharsetForContentType(requestContentType);
+            } else {
+                requestContentType += encoderConfig.defaultContentCharset();
+            }
         }
         return requestContentType;
     }
@@ -409,7 +449,13 @@ class MockMvcRequestSenderImpl implements MockMvcRequestSender, MockMvcRequestAs
         String contentType = APPLICATION_FORM_URLENCODED_VALUE;
         EncoderConfig encoderConfig = config.getEncoderConfig();
         if (encoderConfig.shouldAppendDefaultContentCharsetToContentTypeIfUndefined()) {
-            contentType += "; charset=" + encoderConfig.defaultContentCharset();
+            contentType += "; charset=";
+            if (encoderConfig.hasDefaultCharsetForContentType(contentType)) {
+                contentType += encoderConfig.defaultCharsetForContentType(contentType);
+            } else {
+                contentType += encoderConfig.defaultContentCharset();
+
+            }
         }
         MediaType mediaType = MediaType.parseMediaType(contentType);
         request.contentType(mediaType);
@@ -422,12 +468,12 @@ class MockMvcRequestSenderImpl implements MockMvcRequestSender, MockMvcRequestAs
         return request instanceof MockMultipartHttpServletRequestBuilder;
     }
 
-    private void logRequestIfApplicable(HttpMethod method, String path) {
+    private void logRequestIfApplicable(HttpMethod method, String uri, String originalPath) {
         if (requestLoggingFilter == null) {
             return;
         }
 
-        final RequestSpecificationImpl reqSpec = new RequestSpecificationImpl("", 8080, path, new NoAuthScheme(), Collections.<Filter>emptyList(),
+        final RequestSpecificationImpl reqSpec = new RequestSpecificationImpl("", 8080, uri, new NoAuthScheme(), Collections.<Filter>emptyList(),
                 null, true, convertToRestAssuredConfig(config), logRepository, null);
         if (params != null) {
             new ParamLogger(params) {
@@ -496,7 +542,9 @@ class MockMvcRequestSenderImpl implements MockMvcRequestSender, MockMvcRequestAs
             }
         }
 
-        requestLoggingFilter.filter(reqSpec, null, new FilterContextImpl(path, path, Method.valueOf(method.toString()), null, Collections.<Filter>emptyList()));
+        String uriPath = PathSupport.getPath(uri);
+        String originalUriPath = PathSupport.getPath(originalPath);
+        requestLoggingFilter.filter(reqSpec, null, new FilterContextImpl(uri, originalUriPath, uriPath, uri, uri, new Object[0], Method.valueOf(method.toString()), null, Collections.<Filter>emptyList().iterator()));
     }
 
     private String fileToString(File file, String charset) {
@@ -670,7 +718,7 @@ class MockMvcRequestSenderImpl implements MockMvcRequestSender, MockMvcRequestAs
     public MockMvcRequestAsyncConfigurer timeout(long duration, TimeUnit timeUnit) {
         RestAssuredMockMvcConfig newConfig = config.asyncConfig(new AsyncConfig(duration, timeUnit));
         return new MockMvcRequestSenderImpl(mockMvc, params, queryParams, formParams,
-                attributes, newConfig, requestBody, headers, cookies, multiParts, requestLoggingFilter, resultHandlers, interceptor,
+                attributes, newConfig, requestBody, headers, cookies, multiParts, requestLoggingFilter, resultHandlers, requestPostProcessors, interceptor,
                 basePath, responseSpecification, authentication, logRepository, isAsyncRequest);
     }
 
@@ -684,7 +732,7 @@ class MockMvcRequestSenderImpl implements MockMvcRequestSender, MockMvcRequestAs
 
     public MockMvcRequestAsyncConfigurer async() {
         return new MockMvcRequestSenderImpl(mockMvc, params, queryParams, formParams,
-                attributes, config, requestBody, headers, cookies, multiParts, requestLoggingFilter, resultHandlers, interceptor,
+                attributes, config, requestBody, headers, cookies, multiParts, requestLoggingFilter, resultHandlers, requestPostProcessors, interceptor,
                 basePath, responseSpecification, authentication, logRepository, true);
     }
 

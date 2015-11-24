@@ -15,7 +15,6 @@
  */
 
 
-
 package com.jayway.restassured.internal.filter
 
 import com.jayway.restassured.filter.Filter
@@ -26,8 +25,8 @@ import com.jayway.restassured.specification.FilterableResponseSpecification
 
 class SendRequestFilter implements Filter {
 
-    @Override
-    Response filter(FilterableRequestSpecification requestSpecification, FilterableResponseSpecification responseSpecification, FilterContext context) {
-        return requestSpecification.sendRequest(context.getRequestPath(), context.getRequestMethod(), context.assertionClosure, requestSpecification)
-    }
+  @Override
+  Response filter(FilterableRequestSpecification requestSpecification, FilterableResponseSpecification responseSpecification, FilterContext context) {
+    return requestSpecification.sendRequest(context.getInternalRequestURI(), context.getRequestMethod(), context.assertionClosure, requestSpecification)
+  }
 }

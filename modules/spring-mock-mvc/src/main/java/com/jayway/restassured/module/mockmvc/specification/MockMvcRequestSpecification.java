@@ -1,3 +1,19 @@
+/*
+ * Copyright 2015 the original author or authors.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *        http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 package com.jayway.restassured.module.mockmvc.specification;
 
 import com.jayway.restassured.http.ContentType;
@@ -9,8 +25,13 @@ import com.jayway.restassured.response.Cookie;
 import com.jayway.restassured.response.Cookies;
 import com.jayway.restassured.response.Header;
 import com.jayway.restassured.response.Headers;
+import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.MockMvcBuilder;
 import org.springframework.test.web.servlet.ResultHandler;
+import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
+import org.springframework.test.web.servlet.request.RequestPostProcessor;
+import org.springframework.test.web.servlet.setup.MockMvcConfigurer;
 import org.springframework.web.context.WebApplicationContext;
 
 import java.io.File;
@@ -47,6 +68,32 @@ public interface MockMvcRequestSpecification extends MockMvcRequestSender {
      * @see ContentType
      */
     MockMvcRequestSpecification contentType(String contentType);
+
+    /**
+     * Specify the accept header of the request. This just a shortcut for:
+     * <pre>
+     * header("Accept", contentType);
+     * </pre>
+     *
+     * @param contentType The content type whose accept header {@link com.jayway.restassured.http.ContentType#getAcceptHeader()} will be used as Accept header in the request.
+     * @return The request specification
+     * @see ContentType
+     * @see #header(String, Object, Object...)
+     */
+    MockMvcRequestSpecification accept(ContentType contentType);
+
+    /**
+     * Specify the accept header of the request. This just a shortcut for:
+     * <pre>
+     * header("Accept", contentType);
+     * </pre>
+     *
+     * @param mediaTypes The media type(s) that will be used as Accept header in the request.
+     * @return The request specification
+     * @see ContentType
+     * @see #header(String, Object, Object...)
+     */
+    MockMvcRequestSpecification accept(String mediaTypes);
 
     /**
      * Specify the headers that'll be sent with the request. This is done by specifying the headers in name-value pairs, e.g:
@@ -437,7 +484,7 @@ public interface MockMvcRequestSpecification extends MockMvcRequestSender {
      * </pre>
      * </p>
      * Since the content-type is "application/json" then REST Assured will automatically try to serialize the object using
-     * <a href="http://jackson.codehaus.org/">Jackson</a> or <a href="http://code.google.com/p/google-gson/">Gson</a> if they are
+     * <a href="https://github.com/FasterXML/jackson">Jackson</a> or <a href="https://github.com/google/gson">Gson</a> if they are
      * available in the classpath. If any of these frameworks are not in the classpath then an exception is thrown.
      * <br />
      * If the content-type is "application/xml" then REST Assured will automatically try to serialize the object using <a href="http://jaxb.java.net/">JAXB</a>
@@ -643,8 +690,8 @@ public interface MockMvcRequestSpecification extends MockMvcRequestSender {
      * uploading with a specific control name. It will use mime-type <tt>application/json</tt>.
      * If this is not what you want please use an overloaded method.
      *
-     * @param object      The object to serialize to JSON or XML and send to the server
      * @param controlName Defines the control name of the body part. In HTML this is the attribute name of the input tag.
+     * @param object      The object to serialize to JSON or XML and send to the server
      * @return The request specification
      */
     MockMvcRequestSpecification multiPart(String controlName, Object object);
@@ -653,12 +700,24 @@ public interface MockMvcRequestSpecification extends MockMvcRequestSender {
      * Specify an object that will be serialized and uploaded to the server using multi-part form data
      * uploading with a specific control name.
      *
-     * @param object      The object to serialize to JSON or XML and send to the server
      * @param controlName Defines the control name of the body part. In HTML this is the attribute name of the input tag.
+     * @param object      The object to serialize to JSON or XML and send to the server
      * @param mimeType    The mime-type
      * @return The request specification
      */
     MockMvcRequestSpecification multiPart(String controlName, Object object, String mimeType);
+
+    /**
+     * Specify an object that will be serialized and uploaded to the server using multi-part form data
+     * uploading with a specific control name.
+     *
+     * @param controlName Defines the control name of the body part. In HTML this is the attribute name of the input tag.
+     * @param filename    The name of the content you're uploading
+     * @param object      The object to serialize to JSON or XML and send to the server
+     * @param mimeType    The mime-type
+     * @return The request specification
+     */
+    MockMvcRequestSpecification multiPart(String controlName, String filename, Object object, String mimeType);
 
     /**
      * Specify a byte-array to upload to the server using multi-part form data.
@@ -806,7 +865,9 @@ public interface MockMvcRequestSpecification extends MockMvcRequestSender {
      *
      * @return The request specification
      * @see ResultHandler
+     * @deprecated Use {@link com.jayway.restassured.module.mockmvc.response.ValidatableMockMvcResponse#apply} instead. For example: <code>get("/x").then().apply(print());</code>
      */
+    @Deprecated
     MockMvcRequestSpecification resultHandlers(ResultHandler resultHandler, ResultHandler... resultHandlers);
 
     /**
@@ -820,11 +881,11 @@ public interface MockMvcRequestSpecification extends MockMvcRequestSender {
      * Build a {@link MockMvc} by registering one or more {@code @Controller}'s
      * instances and configuring Spring MVC infrastructure programmatically.
      * This allows full control over the instantiation and initialization of
-     * controllers, and their dependencies, similar to plain unit tests while
+     * controllerOrMockMvcConfigurer, and their dependencies, similar to plain unit tests while
      * also making it possible to test one controller at a time.
      * <p/>
      * <p>When this option is used, the minimum infrastructure required by the
-     * {@link org.springframework.web.servlet.DispatcherServlet} to serve requests with annotated controllers is
+     * {@link org.springframework.web.servlet.DispatcherServlet} to serve requests with annotated controllerOrMockMvcConfigurer is
      * automatically created, and can be customized, resulting in configuration
      * that is equivalent to what the MVC Java configuration provides except
      * using builder style methods.
@@ -835,9 +896,27 @@ public interface MockMvcRequestSpecification extends MockMvcRequestSender {
      * a majority of controllers. A much smaller number of tests can be used
      * to focus on testing and verifying the actual Spring MVC configuration.
      *
-     * @param controllers one or more {@link org.springframework.stereotype.Controller @Controller}'s to test
+     * @param controllerOrMockMvcConfigurer one or more {@link org.springframework.stereotype.Controller @Controller}'s to test
+     *                                      or a combination of controllers and {@link MockMvcConfigurer}
      */
-    MockMvcRequestSpecification standaloneSetup(Object... controllers);
+    MockMvcRequestSpecification standaloneSetup(Object... controllerOrMockMvcConfigurer);
+
+    /**
+     * Build a {@link MockMvc} by using a provided {@code AbstractMockMvcBuilder}
+     * for configuring Spring MVC infrastructure programmatically.
+     * This allows full control over the instantiation and initialization of
+     * controllers, and their dependencies, similar to plain unit tests while
+     * also making it possible to test one controller at a time.
+     * <p/>
+     * <p>If the Spring MVC configuration of an application is relatively
+     * straight-forward, for example when using the MVC namespace or the MVC
+     * Java config, then using this builder might be a good option for testing
+     * a majority of controllers. A much smaller number of tests can be used
+     * to focus on testing and verifying the actual Spring MVC configuration.
+     *
+     * @param builder {@link org.springframework.test.web.servlet.setup.AbstractMockMvcBuilder} to build the MVC mock
+     */
+    MockMvcRequestSpecification standaloneSetup(MockMvcBuilder builder);
 
     /**
      * Provide a {@link org.springframework.test.web.servlet.MockMvc} instance to that REST Assured will use when making this request.
@@ -854,8 +933,11 @@ public interface MockMvcRequestSpecification extends MockMvcRequestSender {
      * will use the context to discover Spring MVC infrastructure and
      * application controllers in it. The context must have been configured with
      * a {@link javax.servlet.ServletContext}.
+     *
+     * @param context            The web application context to use
+     * @param mockMvcConfigurers {@link MockMvcConfigurer}'s to be applied when creating a {@link MockMvc} instance of this WebApplicationContext (optional)
      */
-    MockMvcRequestSpecification webAppContextSetup(WebApplicationContext context);
+    MockMvcRequestSpecification webAppContextSetup(WebApplicationContext context, MockMvcConfigurer... mockMvcConfigurers);
 
     /**
      * Intercept the {@link org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder} created by REST Assured before it's
@@ -872,4 +954,23 @@ public interface MockMvcRequestSpecification extends MockMvcRequestSender {
      * @return The same {@link com.jayway.restassured.module.mockmvc.specification.MockMvcRequestSpecification} instance.
      */
     MockMvcRequestSpecification and();
+
+    /**
+     * An extension point for further initialization of {@link MockHttpServletRequest}
+     * in ways not built directly into the {@code MockHttpServletRequestBuilder}.
+     * Implementation of this interface can have builder-style methods themselves
+     * and be made accessible through static factory methods.
+     * <p>
+     * Note that it's recommended to use {@link MockMvcAuthenticationSpecification#with(RequestPostProcessor, RequestPostProcessor...)} instead of this method when setting authentication/authorization based RequestPostProcessors.
+     * For example:
+     * <pre>
+     * given().auth().with(httpBasic("username", "password")). ..
+     * </pre>
+     * </p>
+     *
+     * @param postProcessor            a post-processor to add
+     * @param additionalPostProcessors Additional post-processors to add
+     * @see MockHttpServletRequestBuilder#with(RequestPostProcessor)
+     */
+    MockMvcRequestSpecification postProcessors(RequestPostProcessor postProcessor, RequestPostProcessor... additionalPostProcessors);
 }

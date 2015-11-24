@@ -18,6 +18,7 @@
 package com.jayway.restassured.internal
 
 import com.jayway.restassured.assertion.CookieMatcher
+import com.jayway.restassured.config.DecoderConfig
 import com.jayway.restassured.config.RestAssuredConfig
 import com.jayway.restassured.filter.log.LogDetail
 import com.jayway.restassured.internal.http.CharsetExtractor
@@ -62,7 +63,7 @@ class RestAssuredResponseOptionsGroovyImpl {
   def String defaultContentType
   def ResponseParserRegistrar rpr
 
-  def String defaultCharset
+  def DecoderConfig decoderConfig
 
   def boolean hasExpectations
 
@@ -226,15 +227,15 @@ or you can specify an explicit ObjectMapper using as($cls, <ObjectMapper>);""")
     String charset = CharsetExtractor.getCharsetFromContentType(isBlank(contentType) ? defaultContentType : contentType)
 
     if (charset == null || charset.trim().equals("")) {
-      if (defaultCharset == null || forcePlatformDefaultCharsetIfNoCharsetIsSpecifiedInResponse) {
-        return Charset.defaultCharset()
+      if (decoderConfig == null || forcePlatformDefaultCharsetIfNoCharsetIsSpecifiedInResponse) {
+        return Charset.defaultCharset().toString()
       } else {
-        charset = defaultCharset
+        charset = decoderConfig.defaultCharsetForContentType(contentType)
       }
     }
 
     if (StringUtils.equalsIgnoreCase(charset, BINARY)) {
-      charset = defaultCharset
+      charset = decoderConfig.defaultCharsetForContentType(contentType)
     }
 
     return charset;
@@ -260,7 +261,7 @@ or you can specify an explicit ObjectMapper using as($cls, <ObjectMapper>);""")
   }
 
   Headers headers() {
-    return responseHeaders
+    return responseHeaders ?: new Headers()
   }
 
   Headers getHeaders() {
@@ -318,7 +319,7 @@ or you can specify an explicit ObjectMapper using as($cls, <ObjectMapper>);""")
   }
 
   int statusCode() {
-    return statusCode
+    return statusCode ?: -1
   }
 
   String getStatusLine() {
@@ -447,7 +448,7 @@ You can specify a default parser using e.g.:\nRestAssured.defaultParser = Parser
       } else {
         closure.call()
       }
-    } else if (rpr.hasCustomParserExludingDefaultParser(contentType)) {
+    } else if (rpr.hasCustomParserExcludingDefaultParser(contentType)) {
       contentTypeToChose = rpr.getNonDefaultParser(contentType).contentType
     } else {
       contentTypeToChose = contentType

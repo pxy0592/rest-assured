@@ -52,6 +52,20 @@ class ScalatraRestExample extends ScalatraServlet {
     compact(render(json))
   }
 
+  get("/hello") {
+    val json = ("hello" -> "Hello Scalatra")
+    compact(render(json))
+  }
+
+  get("/getWithContent") {
+    if (request.body == "hullo") {
+      status = 200
+    } else {
+      status = 400
+      "No or incorrect content"
+    }
+  }
+
   get("/greetXML") {
     greetXML
   }
@@ -85,6 +99,15 @@ class ScalatraRestExample extends ScalatraServlet {
 
   get("/something.json") {
     """{ "value" : "something" }"""
+  }
+
+  get("/utf8-body-json") {
+    """{ "value" : "啊 ☆" }"""
+  }
+
+  get("/utf8-body-xml") {
+    contentType = "application/xml"
+    """<value>啊 ☆</value>"""
   }
 
   get("/jsonStore") {
@@ -128,6 +151,11 @@ class ScalatraRestExample extends ScalatraServlet {
   get("/anonymous_list_with_numbers") {
     contentType = "application/json"
     """[100, 50, 31.0]"""
+  }
+
+  get("/russian") {
+    contentType = "application/json"
+    """{ "title" : "Информационные технологии, интернет, телеком" }"""
   }
 
   get("/products") {
@@ -222,6 +250,12 @@ class ScalatraRestExample extends ScalatraServlet {
     anotherGreetXML
   }
 
+  post("/threeMultiValueParam") {
+    "{ \"list\" : \""+multiParams("list").mkString(",") +"\", " +
+            "\"list2\" : \"" + multiParams("list2").mkString(",") + "\", " +
+            "\"list3\" : \"" + multiParams("list3").mkString(",") + "\"}"
+  }
+
   get("/multiValueParam") {
     "{ \"list\" : \""+multiParams("list").mkString(",") +"\" }"
   }
@@ -311,6 +345,18 @@ class ScalatraRestExample extends ScalatraServlet {
 
   post("/contentTypeAsBody") {
     request.contentType.getOrElse("null")
+  }
+
+  post("/textUriList") {
+    if (!request.getContentType.contains("text")) {
+      status = 400
+    } else {
+      contentType = "application/json"
+      val content = IOUtils.toString(request.getInputStream)
+      val uris = content.split("\n")
+      val json = "uris" -> decompose(uris)
+      compact(render(json))
+    }
   }
 
   get("/:firstName/:lastName") {
@@ -576,6 +622,15 @@ class ScalatraRestExample extends ScalatraServlet {
     response.addCookie(cookie1)
     response.addCookie(cookie2)
     "OK"
+  }
+
+  get("/multiCookieRequest") {
+    val cookies = request.getCookies
+            .map(cookie => Map(cookie.getName -> cookie.getValue))
+            .foldLeft(mutable.ListBuffer[Map[String, String]]())((list, cookie) => {
+      list.add(cookie); list
+    })
+    compact(render(cookies))
   }
 
   post("/j_spring_security_check") {
@@ -1098,6 +1153,11 @@ class ScalatraRestExample extends ScalatraServlet {
   get("/returnContentTypeAsBody") {
       contentType = "text/plain"
       request.getContentType
+  }
+
+  post("/return204WithContentType") {
+    contentType = "application/json"
+    status = 204
   }
 
   def formAuth(loginPage: () => String) = {

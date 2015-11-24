@@ -76,7 +76,7 @@ public class FilterITest extends WithJetty {
             RestAssured.reset();
         }
         String lineSeparator = System.getProperty("line.separator");
-        assertThat(writer.toString(), is("HTTP/1.1 409 Conflict\nContent-Type: text/plain; charset=utf-8\nContent-Length: 5\nServer: Jetty(6.1.14)\n\nERROR" + lineSeparator + "HTTP/1.1 409 Conflict\nContent-Type: text/plain; charset=utf-8\nContent-Length: 5\nServer: Jetty(6.1.14)\n\nERROR" + lineSeparator));
+        assertThat(writer.toString(), is("HTTP/1.1 409 Conflict\nContent-Type: text/plain;charset=utf-8\nContent-Length: 5\nServer: Jetty(9.3.2.v20150730)\n\nERROR" + lineSeparator + "HTTP/1.1 409 Conflict\nContent-Type: text/plain;charset=utf-8\nContent-Length: 5\nServer: Jetty(9.3.2.v20150730)\n\nERROR" + lineSeparator));
     }
 
     @Test
@@ -177,6 +177,25 @@ public class FilterITest extends WithJetty {
                 statusCode(200);
 
         assertThat(contentType.get(), equalTo("application/x-www-form-urlencoded"));
+    }
+
+    @Test public void
+    it_is_possible_to_change_port_and_base_path_from_filters() {
+        given().
+                basePath("/x").
+                port(80).
+                filter((requestSpec, responseSpec, ctx) -> {
+                    requestSpec.port(8080);
+                    requestSpec.basePath("/John");
+                    return ctx.next(requestSpec, responseSpec);
+                }).
+        when().
+                get("/Doe").
+        then().
+                statusCode(200).
+                body("firstName", equalTo("John")).
+                body("lastName", equalTo("Doe")).
+                body("fullName", equalTo("John Doe"));
     }
 
     public static class CountingFilter implements Filter {

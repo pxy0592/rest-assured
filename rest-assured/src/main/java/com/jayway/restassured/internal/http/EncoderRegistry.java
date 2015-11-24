@@ -16,6 +16,7 @@
 
 package com.jayway.restassured.internal.http;
 
+import com.jayway.restassured.config.EncoderConfig;
 import com.jayway.restassured.http.ContentType;
 import com.jayway.restassured.internal.http.HTTPBuilder.RequestConfigDelegate;
 import groovy.json.JsonBuilder;
@@ -23,6 +24,7 @@ import groovy.lang.Closure;
 import groovy.lang.GString;
 import groovy.lang.Writable;
 import groovy.xml.StreamingMarkupBuilder;
+import org.apache.commons.lang3.StringUtils;
 import org.apache.http.HttpEntity;
 import org.apache.http.HttpEntityEnclosingRequest;
 import org.apache.http.NameValuePair;
@@ -35,7 +37,6 @@ import org.codehaus.groovy.runtime.DefaultGroovyMethods;
 import org.codehaus.groovy.runtime.MethodClosure;
 
 import java.io.*;
-import java.nio.charset.Charset;
 import java.util.*;
 
 
@@ -64,18 +65,14 @@ import java.util.*;
  */
 public class EncoderRegistry {
 
-    Charset charset = Charset.defaultCharset();
     private Map<String, Closure> registeredEncoders = buildDefaultEncoderMap();
+    private EncoderConfig encoderConfig = new EncoderConfig();
 
     /**
-     * Set the charset used in the content-type header of all requests that send
-     * textual data.  This must be a charset supported by the Java platform
-     *
-     * @param charset
-     * @see Charset#forName(String)
+     * Set the encoder config
      */
-    public void setCharset(String charset) {
-        this.charset = Charset.forName(charset);
+    public void setEncoderConfig(EncoderConfig encoderConfig) {
+        this.encoderConfig = encoderConfig;
     }
 
     /**
@@ -109,7 +106,7 @@ public class EncoderRegistry {
             try {
                 fileInputStream = new FileInputStream(file);
             } catch (FileNotFoundException e) {
-                throw new RuntimeException("File " + file.getPath() +  " not found", e);
+                throw new RuntimeException("File " + file.getPath() + " not found", e);
             }
             entity = new InputStreamEntity(fileInputStream, -1);
         } else if (data instanceof byte[]) {
@@ -128,7 +125,8 @@ public class EncoderRegistry {
         }
 
         if (entity == null) throw new IllegalArgumentException(
-                "Don't know how to encode " + data + " as a byte stream");
+                "Don't know how to encode " + data + " as a byte stream.\n\nPlease use EncoderConfig (EncoderConfig#encodeContentTypeAs) to specify how to serialize data for this content-type.\n" +
+                        "For example: \"given().config(RestAssured.config().encoderConfig(encoderConfig().encodeContentTypeAs(\"" + ContentTypeExtractor.getContentTypeWithoutCharset(contentTypeToString(contentType)) + "\", ContentType.TEXT))). ..\"");
 
         entity.setContentType(contentTypeToString(contentType));
         return entity;
@@ -201,7 +199,7 @@ public class EncoderRegistry {
                     (val == null) ? "" : val.toString()));
         }
 
-        return new UrlEncodedFormEntity(paramList, charset.name());
+        return new UrlEncodedFormEntity(paramList, encoderConfig.defaultContentCharset());
     }
 
     /**
@@ -300,8 +298,7 @@ public class EncoderRegistry {
     /**
      * Helper method used by encoder methods to create an {@link HttpEntity}
      * instance that encapsulates the request data.  This may be used by any
-     * non-streaming encoder that needs to send textual data.  It also sets the
-     * {@link #setCharset(String) charset} portion of the content-type header.
+     * non-streaming encoder that needs to send textual data.
      *
      * @param ct   content-type of the data
      * @param data textual request data to be encoded
@@ -313,7 +310,11 @@ public class EncoderRegistry {
             throws UnsupportedEncodingException {
         String charset = CharsetExtractor.getCharsetFromContentType(ct);
         if (charset == null) {
-            charset = this.charset.toString();
+            if (encoderConfig.hasDefaultCharsetForContentType(ct)) {
+                charset = encoderConfig.defaultCharsetForContentType(ct);
+            } else {
+                charset = encoderConfig.defaultContentCharset();
+            }
         }
         StringEntity entity = new StringEntity(data, charset);
         entity.setContentType(ct);
@@ -367,9 +368,29 @@ public class EncoderRegistry {
                 closure = registeredEncoders.get(foundCt.toString());
             }
         }
+
+        // We couldn't find an explicit encoder for the given content-type so try to find a match
+        if (closure == null) {
+            closure = tryToFindMatchingEncoder(ct);
+        }
+
+        // If no encoder could be found then use binary
         if (closure == null) {
             return getAt(ContentType.BINARY.toString());
         }
+        return closure;
+    }
+
+    private Closure tryToFindMatchingEncoder(String contentType) {
+        final Closure closure;
+        if (contentType == null) {
+            closure = null;
+        } else if (StringUtils.startsWithIgnoreCase(contentType, "text/") || StringUtils.containsIgnoreCase(contentType, "+text")) {
+            closure = new MethodClosure(this, "encodeText");
+        } else {
+            closure = null;
+        }
+
         return closure;
     }
 

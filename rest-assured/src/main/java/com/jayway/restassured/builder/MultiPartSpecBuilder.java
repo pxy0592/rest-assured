@@ -15,7 +15,13 @@
  */
 package com.jayway.restassured.builder;
 
-import com.jayway.restassured.internal.MultiPartSpecificationImpl;
+import com.jayway.restassured.config.EncoderConfig;
+import com.jayway.restassured.config.ObjectMapperConfig;
+import com.jayway.restassured.internal.mapper.ObjectMapperType;
+import com.jayway.restassured.internal.mapping.ObjectMapperSerializationContextImpl;
+import com.jayway.restassured.internal.mapping.ObjectMapping;
+import com.jayway.restassured.internal.multipart.MultiPartSpecificationImpl;
+import com.jayway.restassured.mapper.ObjectMapper;
 import com.jayway.restassured.specification.MultiPartSpecification;
 import org.apache.commons.lang3.Validate;
 
@@ -23,11 +29,9 @@ import java.io.File;
 import java.io.InputStream;
 import java.nio.charset.Charset;
 
-import static java.lang.String.format;
-
 /**
  * Builder for creating more advanced multi-part requests.
- * <p>
+ * <p/>
  * Usage example:
  * <pre>
  * File myFile = ..
@@ -36,29 +40,67 @@ import static java.lang.String.format;
  */
 public class MultiPartSpecBuilder {
 
+    private final ObjectMapper explicitObjectMapper;
+    private final ObjectMapperType explicitObjectMapperType;
     private Object content;
     private String controlName;
     private String mimeType;
     private String charset;
     private String fileName;
+    private boolean isControlNameExplicit;
+    private boolean isFileNameExplicit;
 
     /**
      * Create a new multi-part specification with control name equal to file.
      *
      * @param content The content to include in the multi-part specification.
-     * @return An instance of MultiPartSpecBuilder.
      */
     public MultiPartSpecBuilder(Object content) {
         Validate.notNull(content, "Multi-part content cannot be null");
         this.content = content;
         this.controlName = "file";
+        this.isControlNameExplicit = false;
+        this.isFileNameExplicit = false;
+        this.explicitObjectMapper = null;
+        this.explicitObjectMapperType = null;
     }
 
     /**
      * Create a new multi-part specification with control name equal to file.
      *
      * @param content The content to include in the multi-part specification.
-     * @return An instance of MultiPartSpecBuilder.
+     */
+    public MultiPartSpecBuilder(Object content, ObjectMapperType objectMapperType) {
+        Validate.notNull(content, "Multi-part content cannot be null");
+        Validate.notNull(objectMapperType, "Object mapper type cannot be null");
+        this.explicitObjectMapperType = objectMapperType;
+        this.explicitObjectMapper = null;
+        this.content = content;
+        this.controlName = "file";
+        this.isControlNameExplicit = false;
+        this.isFileNameExplicit = false;
+    }
+
+    /**
+     * Create a new multi-part specification with control name equal to file.
+     *
+     * @param content The content to include in the multi-part specification.
+     */
+    public MultiPartSpecBuilder(Object content, ObjectMapper objectMapper) {
+        Validate.notNull(content, "Multi-part content cannot be null");
+        Validate.notNull(objectMapper, "Object mapper cannot be null");
+        this.explicitObjectMapper = objectMapper;
+        this.explicitObjectMapperType = null;
+        this.content = content;
+        this.controlName = "file";
+        this.isControlNameExplicit = false;
+        this.isFileNameExplicit = false;
+    }
+
+    /**
+     * Create a new multi-part specification with control name equal to file.
+     *
+     * @param content The content to include in the multi-part specification.
      */
     public MultiPartSpecBuilder(InputStream content) {
         this((Object) content);
@@ -68,7 +110,6 @@ public class MultiPartSpecBuilder {
      * Create a new multi-part specification with control name equal to file.
      *
      * @param content The content to include in the multi-part specification.
-     * @return An instance of MultiPartSpecBuilder.
      */
     public MultiPartSpecBuilder(String content) {
         this((Object) content);
@@ -78,7 +119,6 @@ public class MultiPartSpecBuilder {
      * Create a new multi-part specification with control name equal to file.
      *
      * @param content The content to include in the multi-part specification.
-     * @return An instance of MultiPartSpecBuilder.
      */
     public MultiPartSpecBuilder(byte[] content) {
         this((Object) content);
@@ -88,12 +128,10 @@ public class MultiPartSpecBuilder {
      * Create a new multi-part specification with control name equal to file.
      *
      * @param content The content to include in the multi-part specification.
-     * @return An instance of MultiPartSpecBuilder.
      */
     public MultiPartSpecBuilder(File content) {
         this((Object) content);
     }
-
 
     /**
      * Specify the control name of this multi-part.
@@ -104,6 +142,7 @@ public class MultiPartSpecBuilder {
     public MultiPartSpecBuilder controlName(String controlName) {
         Validate.notEmpty(controlName, "Control name cannot be empty");
         this.controlName = controlName;
+        this.isControlNameExplicit = true;
         return this;
     }
 
@@ -115,11 +154,8 @@ public class MultiPartSpecBuilder {
      * @return An instance of MultiPartSpecBuilder
      */
     public MultiPartSpecBuilder fileName(String fileName) {
-        Validate.notEmpty(fileName, "File name cannot be empty");
-        if (!(content instanceof File || content instanceof byte[] || content instanceof InputStream)) {
-            throw new IllegalArgumentException(format("Cannot specify file name for non file content (%s).", content.getClass().getName()));
-        }
         this.fileName = fileName;
+        this.isFileNameExplicit = true;
         return this;
     }
 
@@ -144,7 +180,7 @@ public class MultiPartSpecBuilder {
     public MultiPartSpecBuilder charset(String charset) {
         Validate.notEmpty(charset, "Charset cannot be empty");
         if (content instanceof byte[] || content instanceof InputStream) {
-            throw new IllegalArgumentException(format("Cannot specify charset input streams or byte arrays."));
+            throw new IllegalArgumentException("Cannot specify charset input streams or byte arrays.");
         }
         this.charset = charset;
         return this;
@@ -180,13 +216,44 @@ public class MultiPartSpecBuilder {
         return this;
     }
 
+    /**
+     * Set the filename of the multi-part to empty (none). This means that the "filename" part will be excluded in the multi-part request.
+     * <p>
+     * This is the same as calling {@link #fileName(String)} with <code>null</code>.
+     * </p>
+     *
+     * @return An instance of MultiPartSpecBuilder
+     * @see #fileName(String)
+     */
+    public MultiPartSpecBuilder emptyFileName() {
+        return fileName(null);
+    }
+
     public MultiPartSpecification build() {
         MultiPartSpecificationImpl spec = new MultiPartSpecificationImpl();
         spec.setCharset(charset);
-        spec.setContent(content);
+        applyContentToSpec(spec);
+        spec.setControlName(controlName);
         spec.setControlName(controlName);
         spec.setFileName(fileName);
         spec.setMimeType(mimeType);
+        spec.setControlNameSpecifiedExplicitly(isControlNameExplicit);
+        spec.setFileNameSpecifiedExplicitly(isFileNameExplicit);
         return spec;
+    }
+
+    private void applyContentToSpec(MultiPartSpecificationImpl spec) {
+        final Object actualContent;
+        if (explicitObjectMapper != null) {
+            ObjectMapperSerializationContextImpl ctx = new ObjectMapperSerializationContextImpl();
+            ctx.setObject(content);
+            ctx.setContentType(mimeType);
+            actualContent = explicitObjectMapper.serialize(ctx);
+        } else if (explicitObjectMapperType != null) {
+            actualContent = ObjectMapping.serialize(content, mimeType, null, explicitObjectMapperType, new ObjectMapperConfig(), new EncoderConfig());
+        } else {
+            actualContent = content;
+        }
+        spec.setContent(actualContent);
     }
 }

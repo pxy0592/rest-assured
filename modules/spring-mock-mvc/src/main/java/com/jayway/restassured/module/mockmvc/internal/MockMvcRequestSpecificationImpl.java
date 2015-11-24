@@ -1,5 +1,22 @@
+/*
+ * Copyright 2015 the original author or authors.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *        http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 package com.jayway.restassured.module.mockmvc.internal;
 
+import com.jayway.restassured.config.EncoderConfig;
 import com.jayway.restassured.config.HeaderConfig;
 import com.jayway.restassured.config.LogConfig;
 import com.jayway.restassured.config.RestAssuredConfig;
@@ -11,7 +28,7 @@ import com.jayway.restassured.internal.log.LogRepository;
 import com.jayway.restassured.internal.mapper.ObjectMapperType;
 import com.jayway.restassured.internal.mapping.ObjectMapperSerializationContextImpl;
 import com.jayway.restassured.internal.mapping.ObjectMapping;
-import com.jayway.restassured.internal.support.ParameterAppender;
+import com.jayway.restassured.internal.support.ParameterUpdater;
 import com.jayway.restassured.mapper.ObjectMapper;
 import com.jayway.restassured.module.mockmvc.config.AsyncConfig;
 import com.jayway.restassured.module.mockmvc.config.RestAssuredMockMvcConfig;
@@ -24,9 +41,12 @@ import com.jayway.restassured.response.Header;
 import com.jayway.restassured.response.Headers;
 import com.jayway.restassured.specification.ResponseSpecification;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.MockMvcBuilder;
 import org.springframework.test.web.servlet.ResultHandler;
+import org.springframework.test.web.servlet.request.RequestPostProcessor;
 import org.springframework.test.web.servlet.setup.DefaultMockMvcBuilder;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
+import org.springframework.test.web.servlet.setup.MockMvcConfigurer;
 import org.springframework.web.context.WebApplicationContext;
 
 import java.io.File;
@@ -40,16 +60,17 @@ import static com.jayway.restassured.internal.assertion.AssertParameter.notNull;
 import static com.jayway.restassured.internal.serialization.SerializationSupport.isSerializableCandidate;
 import static com.jayway.restassured.module.mockmvc.internal.ConfigConverter.convertToRestAssuredConfig;
 import static com.jayway.restassured.module.mockmvc.internal.SpringSecurityClassPathChecker.isSpringSecurityInClasspath;
-import static java.util.Arrays.asList;
+import static com.jayway.restassured.module.mockmvc.internal.UpdateStrategyConverter.convert;
 import static org.apache.commons.lang3.StringUtils.isNotEmpty;
 
 public class MockMvcRequestSpecificationImpl implements MockMvcRequestSpecification, MockMvcAuthenticationSpecification {
 
     private static final String CONTENT_TYPE = "Content-Type";
+    private static final String ACCEPT = "Accept";
 
     private LogRepository logRepository;
 
-    private MockMvc instanceMockMvc;
+    private MockMvcFactory mockMvcFactory;
 
     private String basePath;
 
@@ -62,7 +83,7 @@ public class MockMvcRequestSpecificationImpl implements MockMvcRequestSpecificat
 
     private Object requestBody = null;
 
-    private RestAssuredMockMvcConfig restAssuredMockMvcConfig;
+    private RestAssuredMockMvcConfig cfg;
 
     private Headers requestHeaders = new Headers();
 
@@ -72,7 +93,7 @@ public class MockMvcRequestSpecificationImpl implements MockMvcRequestSpecificat
 
     private RequestLoggingFilter requestLoggingFilter;
 
-    private final ParameterAppender parameterAppender = new ParameterAppender(new ParameterAppender.Serializer() {
+    private final ParameterUpdater parameterUpdater = new ParameterUpdater(new ParameterUpdater.Serializer() {
         public String serializeIfNeeded(Object value) {
             return MockMvcRequestSpecificationImpl.this.serializeIfNeeded(value);
         }
@@ -80,22 +101,30 @@ public class MockMvcRequestSpecificationImpl implements MockMvcRequestSpecificat
 
     private final List<ResultHandler> resultHandlers = new ArrayList<ResultHandler>();
 
+    private final List<RequestPostProcessor> requestPostProcessors = new ArrayList<RequestPostProcessor>();
+
     private MockHttpServletRequestBuilderInterceptor interceptor;
 
     private Object authentication;
 
     private AsyncConfig asyncConfig;
 
-    public MockMvcRequestSpecificationImpl(MockMvc mockMvc, RestAssuredMockMvcConfig config, List<ResultHandler> resultHandlers, String basePath,
+    public MockMvcRequestSpecificationImpl(MockMvcFactory mockMvcFactory, RestAssuredMockMvcConfig config, List<ResultHandler> resultHandlers,
+                                           List<RequestPostProcessor> requestPostProcessors, String basePath,
                                            MockMvcRequestSpecification requestSpecification, ResponseSpecification responseSpecification,
                                            MockMvcAuthenticationScheme authentication) {
         this.logRepository = new LogRepository();
-        this.instanceMockMvc = mockMvc;
+        this.mockMvcFactory = mockMvcFactory == null ? new MockMvcFactory() : mockMvcFactory;
         this.basePath = basePath;
         this.responseSpecification = responseSpecification;
         assignConfig(config);
+
         if (resultHandlers != null) {
             this.resultHandlers.addAll(resultHandlers);
+        }
+
+        if (requestPostProcessors != null) {
+            this.requestPostProcessors.addAll(requestPostProcessors);
         }
 
         if (requestSpecification != null) {
@@ -109,16 +138,27 @@ public class MockMvcRequestSpecificationImpl implements MockMvcRequestSpecificat
 
     public MockMvcRequestSpecification mockMvc(MockMvc mockMvc) {
         notNull(mockMvc, MockMvc.class);
-        return changeMockMvcInstanceTo(mockMvc);
+        return changeMockMvcFactoryTo(new MockMvcFactory(mockMvc));
     }
 
-    public MockMvcRequestSpecification standaloneSetup(Object... controllers) {
-        return changeMockMvcInstanceTo(MockMvcBuilders.standaloneSetup(controllers).build());
+    public MockMvcRequestSpecification standaloneSetup(Object... controllerOrMockMvcConfigurer) {
+        MockMvcFactory mockMvcFactory = StandaloneMockMvcFactory.of(controllerOrMockMvcConfigurer);
+        return changeMockMvcFactoryTo(mockMvcFactory);
     }
 
-    public MockMvcRequestSpecification webAppContextSetup(WebApplicationContext context) {
+    public MockMvcRequestSpecification standaloneSetup(MockMvcBuilder builder) {
+        notNull(builder, MockMvcBuilder.class);
+        return changeMockMvcFactoryTo(new MockMvcFactory(builder));
+    }
+
+    public MockMvcRequestSpecification webAppContextSetup(WebApplicationContext context, MockMvcConfigurer... mockMvcConfigurers) {
         DefaultMockMvcBuilder builder = MockMvcBuilders.webAppContextSetup(context);
-        return changeMockMvcInstanceTo(builder.build());
+        if (mockMvcConfigurers != null && mockMvcConfigurers.length > 0) {
+            for (MockMvcConfigurer mockMvcConfigurer : mockMvcConfigurers) {
+                builder.apply(mockMvcConfigurer);
+            }
+        }
+        return changeMockMvcFactoryTo(new MockMvcFactory(builder));
     }
 
     public MockMvcRequestSpecification interceptor(MockHttpServletRequestBuilderInterceptor interceptor) {
@@ -127,6 +167,15 @@ public class MockMvcRequestSpecificationImpl implements MockMvcRequestSpecificat
     }
 
     public MockMvcRequestSpecification and() {
+        return this;
+    }
+
+    public MockMvcRequestSpecification postProcessors(RequestPostProcessor postProcessor, RequestPostProcessor... additionalPostProcessors) {
+        notNull(postProcessor, RequestPostProcessor.class);
+        this.requestPostProcessors.add(postProcessor);
+        if (additionalPostProcessors != null && additionalPostProcessors.length >= 1) {
+            Collections.addAll(this.requestPostProcessors, additionalPostProcessors);
+        }
         return this;
     }
 
@@ -142,6 +191,16 @@ public class MockMvcRequestSpecificationImpl implements MockMvcRequestSpecificat
     public MockMvcRequestSpecification contentType(String contentType) {
         notNull(contentType, "contentType");
         return header(CONTENT_TYPE, contentType);
+    }
+
+    public MockMvcRequestSpecification accept(ContentType contentType) {
+        notNull(contentType, "contentType");
+        return header(ACCEPT, contentType.getAcceptHeader());
+    }
+
+    public MockMvcRequestSpecification accept(String mediaTypes) {
+        notNull(mediaTypes, "mediaTypes");
+        return header(ACCEPT, mediaTypes);
     }
 
     public MockMvcRequestSpecification headers(String firstHeaderName, Object firstHeaderValue, Object... headerNameValuePairs) {
@@ -185,7 +244,7 @@ public class MockMvcRequestSpecificationImpl implements MockMvcRequestSpecificat
     }
 
     private List<Header> removeMergedHeadersIfNeeded(List<Header> headerList) {
-        HeaderConfig headerConfig = restAssuredMockMvcConfig.getHeaderConfig();
+        HeaderConfig headerConfig = cfg.getHeaderConfig();
         List<Header> filteredList = new ArrayList<Header>();
         for (Header header : headerList) {
             String headerName = header.getName();
@@ -229,7 +288,7 @@ public class MockMvcRequestSpecificationImpl implements MockMvcRequestSpecificat
 
     public MockMvcRequestSpecification header(Header header) {
         notNull(header, "Header");
-        return headers(new Headers(asList(header)));
+        return headers(new Headers(Collections.singletonList(header)));
     }
 
     public MockMvcRequestLogSpecification log() {
@@ -244,20 +303,20 @@ public class MockMvcRequestSpecificationImpl implements MockMvcRequestSpecificat
 
     public MockMvcRequestSpecification params(Map<String, ?> parametersMap) {
         notNull(parametersMap, "parametersMap");
-        parameterAppender.appendParameters((Map<String, Object>) parametersMap, params);
+        parameterUpdater.updateParameters(convert(cfg.getParamConfig().requestParamsUpdateStrategy()), (Map<String, Object>) parametersMap, params);
         return this;
     }
 
     public MockMvcRequestSpecification param(String parameterName, Object... parameterValues) {
         notNull(parameterName, "parameterName");
-        parameterAppender.appendZeroToManyParameters(params, parameterName, parameterValues);
+        parameterUpdater.updateZeroToManyParameters(convert(cfg.getParamConfig().requestParamsUpdateStrategy()), params, parameterName, parameterValues);
         return this;
     }
 
     public MockMvcRequestSpecification param(String parameterName, Collection<?> parameterValues) {
         notNull(parameterName, "parameterName");
         notNull(parameterValues, "parameterValues");
-        parameterAppender.appendCollectionParameter(params, parameterName, (Collection<Object>) parameterValues);
+        parameterUpdater.updateCollectionParameter(convert(cfg.getParamConfig().requestParamsUpdateStrategy()), params, parameterName, (Collection<Object>) parameterValues);
         return this;
     }
 
@@ -269,20 +328,20 @@ public class MockMvcRequestSpecificationImpl implements MockMvcRequestSpecificat
 
     public MockMvcRequestSpecification queryParams(Map<String, ?> parametersMap) {
         notNull(parametersMap, "parametersMap");
-        parameterAppender.appendParameters((Map<String, Object>) parametersMap, queryParams);
+        parameterUpdater.updateParameters(convert(cfg.getParamConfig().queryParamsUpdateStrategy()), (Map<String, Object>) parametersMap, queryParams);
         return this;
     }
 
     public MockMvcRequestSpecification queryParam(String parameterName, Object... parameterValues) {
         notNull(parameterName, "parameterName");
-        parameterAppender.appendZeroToManyParameters(queryParams, parameterName, parameterValues);
+        parameterUpdater.updateZeroToManyParameters(convert(cfg.getParamConfig().queryParamsUpdateStrategy()), queryParams, parameterName, parameterValues);
         return this;
     }
 
     public MockMvcRequestSpecification queryParam(String parameterName, Collection<?> parameterValues) {
         notNull(parameterName, "parameterName");
         notNull(parameterValues, "parameterValues");
-        parameterAppender.appendCollectionParameter(queryParams, parameterName, (Collection<Object>) parameterValues);
+        parameterUpdater.updateCollectionParameter(convert(cfg.getParamConfig().queryParamsUpdateStrategy()), queryParams, parameterName, (Collection<Object>) parameterValues);
         return this;
     }
 
@@ -294,33 +353,33 @@ public class MockMvcRequestSpecificationImpl implements MockMvcRequestSpecificat
 
     public MockMvcRequestSpecification formParams(Map<String, ?> parametersMap) {
         notNull(parametersMap, "parametersMap");
-        parameterAppender.appendParameters((Map<String, Object>) parametersMap, formParams);
+        parameterUpdater.updateParameters(convert(cfg.getParamConfig().formParamsUpdateStrategy()), (Map<String, Object>) parametersMap, formParams);
         return this;
     }
 
     public MockMvcRequestSpecification formParam(String parameterName, Object... parameterValues) {
         notNull(parameterName, "parameterName");
-        parameterAppender.appendZeroToManyParameters(formParams, parameterName, parameterValues);
+        parameterUpdater.updateZeroToManyParameters(convert(cfg.getParamConfig().formParamsUpdateStrategy()), formParams, parameterName, parameterValues);
         return this;
     }
 
     public MockMvcRequestSpecification formParam(String parameterName, Collection<?> parameterValues) {
         notNull(parameterName, "parameterName");
         notNull(parameterValues, "parameterValues");
-        parameterAppender.appendCollectionParameter(formParams, parameterName, (Collection<Object>) parameterValues);
+        parameterUpdater.updateCollectionParameter(convert(cfg.getParamConfig().formParamsUpdateStrategy()), formParams, parameterName, (Collection<Object>) parameterValues);
         return this;
     }
 
     public MockMvcRequestSpecification attribute(String attributeName, Object attributeValue) {
         notNull(attributeName, "attributeName");
         notNull(attributeValue, "attributeValue");
-        parameterAppender.appendZeroToManyParameters(attributes, attributeName, attributeValue);
+        parameterUpdater.updateZeroToManyParameters(convert(cfg.getParamConfig().attributeUpdateStrategy()), attributes, attributeName, attributeValue);
         return this;
     }
 
     public MockMvcRequestSpecification attributes(Map<String, ?> attributesMap) {
         notNull(attributesMap, "attributesMap");
-        parameterAppender.appendParameters((Map<String, Object>) attributesMap, attributes);
+        parameterUpdater.updateParameters(convert(cfg.getParamConfig().attributeUpdateStrategy()), (Map<String, Object>) attributesMap, attributes);
         return this;
     }
 
@@ -346,7 +405,7 @@ public class MockMvcRequestSpecificationImpl implements MockMvcRequestSpecificat
         }
 
         String requestContentType = getRequestContentType();
-        this.requestBody = ObjectMapping.serialize(object, requestContentType, findEncoderCharsetOrReturnDefault(requestContentType), null, restAssuredMockMvcConfig.getObjectMapperConfig());
+        this.requestBody = ObjectMapping.serialize(object, requestContentType, findEncoderCharsetOrReturnDefault(requestContentType), null, cfg.getObjectMapperConfig(), cfg.getEncoderConfig());
         return this;
     }
 
@@ -366,7 +425,7 @@ public class MockMvcRequestSpecificationImpl implements MockMvcRequestSpecificat
         notNull(object, "object");
         notNull(mapperType, "Object mapper type");
         String requestContentType = getRequestContentType();
-        this.requestBody = ObjectMapping.serialize(object, requestContentType, findEncoderCharsetOrReturnDefault(requestContentType), mapperType, restAssuredMockMvcConfig.getObjectMapperConfig());
+        this.requestBody = ObjectMapping.serialize(object, requestContentType, findEncoderCharsetOrReturnDefault(requestContentType), mapperType, cfg.getObjectMapperConfig(), cfg.getEncoderConfig());
         return this;
     }
 
@@ -429,11 +488,11 @@ public class MockMvcRequestSpecificationImpl implements MockMvcRequestSpecificat
 
     public MockMvcRequestSpecification cookie(Cookie cookie) {
         notNull(cookie, "Cookie");
-        return cookies(new Cookies(asList(cookie)));
+        return cookies(new Cookies(Collections.singletonList(cookie)));
     }
 
     public MockMvcRequestSpecification multiPart(File file) {
-        multiParts.add(new MockMvcMultiPart(file));
+        multiParts.add(new MockMvcMultiPart(cfg.getMultiPartConfig(), file));
         return this;
     }
 
@@ -448,12 +507,17 @@ public class MockMvcRequestSpecificationImpl implements MockMvcRequestSpecificat
     }
 
     public MockMvcRequestSpecification multiPart(String controlName, Object object) {
-        multiParts.add(new MockMvcMultiPart(controlName, serializeIfNeeded(object)));
+        multiParts.add(new MockMvcMultiPart(cfg.getMultiPartConfig(), controlName, serializeIfNeeded(object)));
         return this;
     }
 
     public MockMvcRequestSpecification multiPart(String controlName, Object object, String mimeType) {
-        multiParts.add(new MockMvcMultiPart(controlName, serializeIfNeeded(object, mimeType), mimeType));
+        multiParts.add(new MockMvcMultiPart(cfg.getMultiPartConfig(), controlName, serializeIfNeeded(object, mimeType), mimeType));
+        return this;
+    }
+
+    public MockMvcRequestSpecification multiPart(String controlName, String filename, Object object, String mimeType) {
+        multiParts.add(new MockMvcMultiPart(controlName, filename, serializeIfNeeded(object, mimeType), mimeType));
         return this;
     }
 
@@ -478,12 +542,12 @@ public class MockMvcRequestSpecificationImpl implements MockMvcRequestSpecificat
     }
 
     public MockMvcRequestSpecification multiPart(String controlName, String contentBody) {
-        multiParts.add(new MockMvcMultiPart(controlName, contentBody));
+        multiParts.add(new MockMvcMultiPart(cfg.getMultiPartConfig(), controlName, contentBody));
         return this;
     }
 
     public MockMvcRequestSpecification multiPart(String controlName, String contentBody, String mimeType) {
-        multiParts.add(new MockMvcMultiPart(controlName, contentBody, mimeType));
+        multiParts.add(new MockMvcMultiPart(cfg.getMultiPartConfig(), controlName, contentBody, mimeType));
         return this;
     }
 
@@ -510,9 +574,9 @@ public class MockMvcRequestSpecificationImpl implements MockMvcRequestSpecificat
             this.basePath = that.getBasePath();
         }
 
-        MockMvc otherInstanceMockMvc = that.getInstanceMockMvc();
-        if (otherInstanceMockMvc != null) {
-            this.changeMockMvcInstanceTo(otherInstanceMockMvc);
+        MockMvcFactory otherMockMvcFactory = that.getMockMvcFactory();
+        if (otherMockMvcFactory != null && otherMockMvcFactory.isAssigned()) {
+            this.changeMockMvcFactoryTo(otherMockMvcFactory);
         }
 
         this.cookies(that.getCookies());
@@ -533,6 +597,7 @@ public class MockMvcRequestSpecificationImpl implements MockMvcRequestSpecificat
 
         this.multiParts.addAll(that.getMultiParts());
         this.resultHandlers.addAll(that.getResultHandlers());
+        this.requestPostProcessors.addAll(that.getRequestPostProcessors());
 
         RequestLoggingFilter otherRequestLoggingFilter = that.getRequestLoggingFilter();
         if (otherRequestLoggingFilter != null) {
@@ -570,10 +635,6 @@ public class MockMvcRequestSpecificationImpl implements MockMvcRequestSpecificat
                 thisConfig = thisConfig.headerConfig(otherConfig.getHeaderConfig());
             }
 
-            if (otherConfig.getHeaderConfig().isUserConfigured()) {
-                thisConfig = thisConfig.headerConfig(otherConfig.getHeaderConfig());
-            }
-
             if (otherConfig.getJsonConfig().isUserConfigured()) {
                 thisConfig = thisConfig.jsonConfig(otherConfig.getJsonConfig());
             }
@@ -598,6 +659,18 @@ public class MockMvcRequestSpecificationImpl implements MockMvcRequestSpecificat
                 thisConfig = thisConfig.asyncConfig(otherConfig.getAsyncConfig());
             }
 
+            if (otherConfig.getMultiPartConfig().isUserConfigured()) {
+                thisConfig = thisConfig.multiPartConfig(otherConfig.getMultiPartConfig());
+            }
+
+            if (otherConfig.getMockMvcConfig().isUserConfigured()) {
+                thisConfig = thisConfig.mockMvcConfig(otherConfig.getMockMvcConfig());
+            }
+
+            if (otherConfig.getParamConfig().isUserConfigured()) {
+                thisConfig = thisConfig.paramConfig(otherConfig.getParamConfig());
+            }
+
             thisOne.config(thisConfig);
         } else if (!thisIsUserConfigured && otherIsUserConfigured) {
             thisOne.config(otherConfig);
@@ -605,7 +678,7 @@ public class MockMvcRequestSpecificationImpl implements MockMvcRequestSpecificat
     }
 
     public MockMvcRequestSpecification sessionId(String sessionIdValue) {
-        return sessionId(restAssuredMockMvcConfig.getSessionConfig().sessionIdName(), sessionIdValue);
+        return sessionId(cfg.getSessionConfig().sessionIdName(), sessionIdValue);
     }
 
     public MockMvcRequestSpecification sessionId(String sessionIdName, String sessionIdValue) {
@@ -636,20 +709,25 @@ public class MockMvcRequestSpecificationImpl implements MockMvcRequestSpecificat
     }
 
     public MockMvcRequestAsyncSender when() {
-        LogConfig logConfig = restAssuredMockMvcConfig.getLogConfig();
+        LogConfig logConfig = cfg.getLogConfig();
         if (requestLoggingFilter == null && logConfig.isLoggingOfRequestAndResponseIfValidationFailsEnabled()) {
             log().ifValidationFails(logConfig.logDetailOfRequestAndResponseIfValidationFails(), logConfig.isPrettyPrintingEnabled());
         }
-
-        return new MockMvcRequestSenderImpl(instanceMockMvc, params, queryParams, formParams, attributes, restAssuredMockMvcConfig, requestBody,
-                requestHeaders, cookies, multiParts, requestLoggingFilter, resultHandlers, interceptor, basePath, responseSpecification, authentication,
+        MockMvc mockMvc = mockMvcFactory.build(cfg.getMockMvcConfig());
+        return new MockMvcRequestSenderImpl(mockMvc, params, queryParams, formParams, attributes, cfg, requestBody,
+                requestHeaders, cookies, multiParts, requestLoggingFilter, resultHandlers, requestPostProcessors, interceptor, basePath, responseSpecification, authentication,
                 logRepository);
     }
 
     private String findEncoderCharsetOrReturnDefault(String contentType) {
         String charset = CharsetExtractor.getCharsetFromContentType(contentType);
         if (charset == null) {
-            charset = restAssuredMockMvcConfig.getEncoderConfig().defaultContentCharset();
+            EncoderConfig encoderConfig = cfg.getEncoderConfig();
+            if (encoderConfig.hasDefaultCharsetForContentType(contentType)) {
+                charset = encoderConfig.defaultCharsetForContentType(contentType);
+            } else {
+                charset = encoderConfig.defaultContentCharset();
+            }
         }
         return charset;
     }
@@ -659,7 +737,7 @@ public class MockMvcRequestSpecificationImpl implements MockMvcRequestSpecificat
     }
 
     private String serializeIfNeeded(Object object, String contentType) {
-        return isSerializableCandidate(object) ? ObjectMapping.serialize(object, contentType, findEncoderCharsetOrReturnDefault(contentType), null, restAssuredMockMvcConfig.getObjectMapperConfig()) : object.toString();
+        return isSerializableCandidate(object) ? ObjectMapping.serialize(object, contentType, findEncoderCharsetOrReturnDefault(contentType), null, cfg.getObjectMapperConfig(), cfg.getEncoderConfig()) : object.toString();
     }
 
     public MockMvcResponse get(String path, Object... pathParams) {
@@ -803,28 +881,28 @@ public class MockMvcRequestSpecificationImpl implements MockMvcRequestSpecificat
     }
 
     public RestAssuredConfig getRestAssuredConfig() {
-        return convertToRestAssuredConfig(restAssuredMockMvcConfig);
+        return convertToRestAssuredConfig(cfg);
     }
 
     public void setRequestLoggingFilter(RequestLoggingFilter requestLoggingFilter) {
         this.requestLoggingFilter = requestLoggingFilter;
     }
 
-    private MockMvcRequestSpecification changeMockMvcInstanceTo(MockMvc mockMvc) {
-        this.instanceMockMvc = mockMvc;
+    private MockMvcRequestSpecification changeMockMvcFactoryTo(MockMvcFactory mockMvcFactory) {
+        this.mockMvcFactory = mockMvcFactory;
         return this;
     }
 
     private void assignConfig(RestAssuredMockMvcConfig config) {
         if (config == null) {
-            this.restAssuredMockMvcConfig = new RestAssuredMockMvcConfig();
+            this.cfg = new RestAssuredMockMvcConfig();
         } else {
-            this.restAssuredMockMvcConfig = config;
+            this.cfg = config;
         }
     }
 
-    public MockMvc getInstanceMockMvc() {
-        return instanceMockMvc;
+    public MockMvcFactory getMockMvcFactory() {
+        return mockMvcFactory;
     }
 
     public String getBasePath() {
@@ -856,7 +934,7 @@ public class MockMvcRequestSpecificationImpl implements MockMvcRequestSpecificat
     }
 
     public RestAssuredMockMvcConfig getRestAssuredMockMvcConfig() {
-        return restAssuredMockMvcConfig;
+        return cfg;
     }
 
     public Headers getRequestHeaders() {
@@ -887,6 +965,10 @@ public class MockMvcRequestSpecificationImpl implements MockMvcRequestSpecificat
         return resultHandlers;
     }
 
+    public List<RequestPostProcessor> getRequestPostProcessors() {
+        return requestPostProcessors;
+    }
+
     public MockHttpServletRequestBuilderInterceptor getInterceptor() {
         return interceptor;
     }
@@ -900,6 +982,16 @@ public class MockMvcRequestSpecificationImpl implements MockMvcRequestSpecificat
     public MockMvcRequestSpecification principal(Principal principal) {
         notNull(principal, Principal.class);
         this.authentication = principal;
+        return this;
+    }
+
+    public MockMvcRequestSpecification with(RequestPostProcessor requestPostProcessor, RequestPostProcessor... additionalRequestPostProcessor) {
+        notNull(requestPostProcessor, RequestPostProcessor.class);
+        this.authentication = null;
+        this.requestPostProcessors.add(requestPostProcessor);
+        if (!(additionalRequestPostProcessor == null || additionalRequestPostProcessor.length == 0)) {
+            this.requestPostProcessors.addAll(Arrays.asList(additionalRequestPostProcessor));
+        }
         return this;
     }
 

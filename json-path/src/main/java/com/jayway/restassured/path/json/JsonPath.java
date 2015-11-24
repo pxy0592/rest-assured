@@ -38,7 +38,7 @@ import java.util.Map.Entry;
 
 /**
  * JsonPath is an alternative to using XPath for easily getting values from a Object document. It follows the
- * Groovy <a href="http://groovy.codehaus.org/GPath">GPath</a> syntax when getting an object from the document. You can regard it as an alternative to XPath for JSON.
+ * Groovy <a href="http://docs.groovy-lang.org/latest/html/documentation/#_gpath">GPath</a> syntax when getting an object from the document. You can regard it as an alternative to XPath for JSON.
  * E.g. given the following Object document:
  * <pre>
  * { "store": {
@@ -352,6 +352,17 @@ public class JsonPath {
     }
 
     /**
+     * Get the result of an Object path expression as a UUID.
+     *
+     * @param path The Object path.
+     * @return The object matching the Object path. A {@link java.lang.ClassCastException} will be thrown if the object
+     *         cannot be casted to the expected type.
+     */
+    public UUID getUUID(String path) {
+        return ObjectConverter.convertObjectTo(get(path), UUID.class);
+    }
+
+    /**
      * Get the result of an Object path expression as a list.
      *
      * @param path The Object path.
@@ -375,8 +386,10 @@ public class JsonPath {
     public <T> List<T> getList(String path, Class<T> genericType) {
         final List<T> original = get(path);
         final List<T> newList = new LinkedList<T>();
-        for (T t : original) {
-            newList.add(ObjectConverter.convertObjectTo(t, genericType));
+        if (original != null) {
+            for (T t : original) {
+                newList.add(ObjectConverter.convertObjectTo(t, genericType));
+            }
         }
         return Collections.unmodifiableList(newList);
     }
@@ -936,7 +949,7 @@ public class JsonPath {
 
     private ConfigurableJsonSlurper createConfigurableJsonSlurper() {
         JsonPathConfig cfg = getJsonPathConfig();
-        return new ConfigurableJsonSlurper(cfg.shouldRepresentJsonNumbersAsBigDecimal());
+        return new ConfigurableJsonSlurper(cfg.numberReturnType());
     }
 
     private JsonPathConfig getJsonPathConfig() {

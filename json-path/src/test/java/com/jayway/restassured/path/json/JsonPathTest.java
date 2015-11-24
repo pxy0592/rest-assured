@@ -24,6 +24,7 @@ import org.junit.Test;
 import java.math.BigDecimal;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 
 import static com.jayway.restassured.path.json.JsonPath.*;
 import static com.jayway.restassured.path.json.config.JsonPathConfig.NumberReturnType.BIG_DECIMAL;
@@ -69,6 +70,8 @@ public class JsonPathTest {
     private final String JSON2 = "[{\"email\":\"name1@mail.com\",\"alias\":\"name one\",\"phone\":\"3456789\"},\n" +
             "{\"email\":\"name2@mail.com\",\"alias\":\"name two\",\"phone\":\"1234567\"},\n" +
             "{\"email\":\"name3@mail.com\",\"alias\":\"name three\",\"phone\":\"2345678\"}]";
+
+    private final String JSON3 = "{\"id\":\"db24eeeb-7fe5-41d3-8f06-986b793ecc91\"}";
 
 
     private final String JSON_MAP = "{ \"price1\" : 12.3,\n" +
@@ -294,6 +297,13 @@ public class JsonPathTest {
         float phoneNumber = from(JSON2).getFloat("phone[0]");
 
         assertThat(phoneNumber, equalTo(3456789f));
+    }
+
+    @Test
+    public void convertsValueToUUIDWhenExplicitlyRequested() throws Exception {
+        UUID uuid = from(JSON3).getUUID("id");
+
+        assertThat(uuid, equalTo(UUID.fromString("db24eeeb-7fe5-41d3-8f06-986b793ecc91")));
     }
 
     @Test
@@ -575,5 +585,155 @@ public class JsonPathTest {
 
         // Then
         assertThat(jsonPath.getString("6269f15a0bb9b1b7d86ae718e84cddcd.attr1"), equalTo("val1"));
+    }
+
+    @Test public void
+    automatically_escapes_json_attributes_whose_name_equals_properties() {
+        // Given
+        String json = "{\n" +
+                "   \"features\":[\n" +
+                "      {\n" +
+                "         \"type\":\"Feature\",\n" +
+                "         \"geometry\":{\n" +
+                "            \"type\":\"GeometryCollection\",\n" +
+                "            \"geometries\":[\n" +
+                "               {\n" +
+                "                  \"type\":\"Point\",\n" +
+                "                  \"coordinates\":[\n" +
+                "                     19.883992823270653,\n" +
+                "                     50.02026203045478\n" +
+                "                  ]\n" +
+                "               }\n" +
+                "            ]\n" +
+                "         },\n" +
+                "         \"properties\":{\n" +
+                "            \"gridId\":6\n" +
+                "         }\n" +
+                "      },\n" +
+                "      {\n" +
+                "         \"type\":\"Feature\",\n" +
+                "         \"geometry\":{\n" +
+                "            \"type\":\"GeometryCollection\",\n" +
+                "            \"geometries\":[\n" +
+                "               {\n" +
+                "                  \"type\":\"Point\",\n" +
+                "                  \"coordinates\":[\n" +
+                "                     19.901266347582094,\n" +
+                "                     50.07074684071764\n" +
+                "                  ]\n" +
+                "               }\n" +
+                "            ]\n" +
+                "         },\n" +
+                "         \"properties\":{\n" +
+                "            \"gridId\":7\n" +
+                "         }\n" +
+                "      }\n" +
+                "   ]\n" +
+                "}";
+        // When
+        JsonPath jsonPath = new JsonPath(json);
+
+        // Then
+        assertThat(jsonPath.getList("features.properties.gridId", Integer.class), hasItems(7));
+    }
+
+    @Test public void
+    can_manually_escape_class_property() {
+        // Given
+        String json = "{\n" +
+                "  \"semester\": \"Fall 2015\",\n" +
+                "  \"groups\": [\n" +
+                "    {\n" +
+                "      \"siteUrl\": \"http://cphbusinessjb.cloudapp.net/CA2/\",\n" +
+                "      \"error\": \"NO AUTHOR/CLASS-INFO\"\n" +
+                "    },\n" +
+                "    {\n" +
+                "      \"siteUrl\": \"http://ca2-ebski.rhcloud.com/CA2New/\",\n" +
+                "      \"authors\": \"Ebbe, Kasper, Christoffer\",\n" +
+                "      \"class\": \"A klassen\",\n" +
+                "      \"group\": \"Gruppe: Johns Llama Herders A/S\"\n" +
+                "    },\n" +
+                "    {\n" +
+                "      \"siteUrl\": \"http://ca2-chrislind.rhcloud.com/CA2Final/\",\n" +
+                "      \"error\": \"NO AUTHOR/CLASS-INFO\"\n" +
+                "    },\n" +
+                "    {\n" +
+                "      \"siteUrl\": \"http://ca2-pernille.rhcloud.com/NYCA2/\",\n" +
+                "      \"authors\": \"Marta, Jeanette, Pernille\",\n" +
+                "      \"class\": \"DAT A\",\n" +
+                "      \"group\": \"Group: MJP\"\n" +
+                "    },\n" +
+                "    {\n" +
+                "      \"siteUrl\": \"https://ca2-afn.rhcloud.com:8443/company.jsp\",\n" +
+                "      \"error\": \"NO AUTHOR/CLASS-INFO\"\n" +
+                "    },\n" +
+                "    {\n" +
+                "      \"siteUrl\": \"http://ca-smcphbusiness.rhcloud.com/ca2/index.jsp\",\n" +
+                "      \"authors\": \"Mikkel, Steffen, B Andersen\",\n" +
+                "      \"class\": \"A Class Computer Science\",\n" +
+                "      \"group\": \"1\"\n" +
+                "    }\n" +
+                "  ]\n" +
+                "}";
+        // When
+        JsonPath jsonPath = new JsonPath(json);
+
+        // Then
+        assertThat(jsonPath.getList("groups.getAt('class')", String.class), hasItems("A klassen"));
+    }
+
+    @Test public void
+    automatically_escapes_class_property() {
+        // Given
+        String json = "{\n" +
+                "  \"semester\": \"Fall 2015\",\n" +
+                "  \"groups\": [\n" +
+                "    {\n" +
+                "      \"siteUrl\": \"http://cphbusinessjb.cloudapp.net/CA2/\",\n" +
+                "      \"error\": \"NO AUTHOR/CLASS-INFO\"\n" +
+                "    },\n" +
+                "    {\n" +
+                "      \"siteUrl\": \"http://ca2-ebski.rhcloud.com/CA2New/\",\n" +
+                "      \"authors\": \"Ebbe, Kasper, Christoffer\",\n" +
+                "      \"class\": \"A klassen\",\n" +
+                "      \"group\": \"Gruppe: Johns Llama Herders A/S\"\n" +
+                "    },\n" +
+                "    {\n" +
+                "      \"siteUrl\": \"http://ca2-chrislind.rhcloud.com/CA2Final/\",\n" +
+                "      \"error\": \"NO AUTHOR/CLASS-INFO\"\n" +
+                "    },\n" +
+                "    {\n" +
+                "      \"siteUrl\": \"http://ca2-pernille.rhcloud.com/NYCA2/\",\n" +
+                "      \"authors\": \"Marta, Jeanette, Pernille\",\n" +
+                "      \"class\": \"DAT A\",\n" +
+                "      \"group\": \"Group: MJP\"\n" +
+                "    },\n" +
+                "    {\n" +
+                "      \"siteUrl\": \"https://ca2-afn.rhcloud.com:8443/company.jsp\",\n" +
+                "      \"error\": \"NO AUTHOR/CLASS-INFO\"\n" +
+                "    },\n" +
+                "    {\n" +
+                "      \"siteUrl\": \"http://ca-smcphbusiness.rhcloud.com/ca2/index.jsp\",\n" +
+                "      \"authors\": \"Mikkel, Steffen, B Andersen\",\n" +
+                "      \"class\": \"A Class Computer Science\",\n" +
+                "      \"group\": \"1\"\n" +
+                "    }\n" +
+                "  ]\n" +
+                "}";
+        // When
+        JsonPath jsonPath = new JsonPath(json);
+
+        // Then
+        assertThat(jsonPath.getList("groups.class", String.class), hasItems("A klassen"));
+    }
+
+    /**
+     * Asserts that https://github.com/jayway/rest-assured/issues/556 is resolved
+     */
+    @Test public void
+    unicode_json_values_are_pretty_printed_without_unicode_escaping() {
+        final String prettyJson = with("{\"some\":\"ŘÍŠŽŤČÝŮŇÚĚĎÁÉÓ\"}").prettyPrint();
+
+        assertThat(prettyJson, equalTo("{\n    \"some\": \"ŘÍŠŽŤČÝŮŇÚĚĎÁÉÓ\"\n}"));
     }
 }
